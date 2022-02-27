@@ -1,0 +1,124 @@
+---
+title: "Data Exploration Project"
+author: "Mario Atmadji"
+date: "2/21/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+First, I try to combine different data files by universities’ names or codes.
+
+Load all of the library that we want to use
+```{r}
+library(tidyverse)
+library(vtable)
+library(jtools)
+library(readr)
+library(purrr)
+library(dplyr)
+library(lubridate)
+```
+
+**Data Cleaning**
+
+First of all, I need to combine all of the csv  files and put in one data sets.
+```{r}
+flist <- list.files(path = "Lab3_Rawdata", pattern =  'trends_up_to_', full.names = TRUE)
+scorecard <- read_csv("Lab3_Rawdata/Most+Recent+Cohorts+(Scorecard+Elements).csv")
+
+data <- flist %>%
+  map(read_csv) %>%
+  bind_rows()
+```
+
+
+Next, because there are  couples of the university name that has the same school name , i need to filter and clean all of the data so it will only have 1 name of school.
+```{r}
+id_name_link <- read_csv("Lab3_Rawdata/id_name_link.csv") %>%
+  group_by(schname) %>%
+  mutate(N=n()) %>%
+  filter(N==1)
+```
+
+
+Next, I grouped data by search keywords and standardized the index. After that, I computed the average weekly search index by school name. Since all indexes have the same unit now, it can be generalized through university names rather than keywords.
+```{r}
+googletrends <- data %>%
+  na.omit(trends) %>%
+  mutate(new_date = as.Date(monthorweek)) %>%
+  group_by(keyword) %>%
+  mutate(new_index = (index-mean(index))/sd(index))
+structural_date = as.Date("2015-01-01")
+```
+
+After that, I computed the average weekly search index by school name. Since all indexes have the same unit now, it can be generalized through university names rather than keywords.
+```{r}
+trends2015before <- googletrends %>%
+  group_by(schname) %>%
+  filter(new_date<structural_date) %>%
+  mutate(average_index_2015before = mean(new_index)) %>%
+  distinct(schname, .keep_all= TRUE)
+
+trends2015after <- googletrends %>%
+  group_by(schname) %>%
+  filter(new_date>=structural_date) %>%
+  mutate(average_index_2015later = mean(new_index)) %>%
+  distinct(schname, .keep_all= TRUE)
+
+trends2015before <- trends2015before[c("schname", "average_index_2015before")]
+trends2015after <- trends2015after[c("schname", "average_index_2015later")]
+
+trends2015before <- trends2015before %>%
+  left_join(trends2015after, by = "schname", keep = TRUE) %>%
+  left_join(id_name_link, by = c("schname.x" = "schname"), keep = TRUE) %>%
+  na.omit()
+```
+
+I imported the full data set with the most recent scorecard and cleaned the data set to prepare for the estimation. To put it in a different way, drop duplicated universities, make a new dummy variable which denotes ownership of the university, generate an earning variable and clean the necessary variables from NULL and categorical values. The percentile variable indicates the relative rank of the average earning of the particular university graduates. 
+
+```{r}
+scorecard <- scorecard %>%
+  right_join(trends2015before, by = c("UNITID" = "unitid"), keep = TRUE)
+
+scorecard <- scorecard %>%
+  mutate(own = replace(scorecard$CONTROL, scorecard$CONTROL == 2|3, 0)) %>%
+  na.omit()
+earning <- rank(scorecard$`md_earn_wne_p10-REPORTED-EARNINGS`)/nrow(scorecard)
+```
+
+```{r}
+#I clean chosen variables from NULLs, categorical values and transform into numerical values. For  the digit code i found it in the internet so i use it to run the code, i fotot how to code for tranform value to the numerical value. 
+
+scorecard <- cbind(scorecard, earning)
+scprecard <- scorecard[grep("[[:digit:]]", scorecard$UGDS), ]
+scorecard <- scorecard[grep("[[:digit:]]", scorecard$SAT_AVG), ]
+scorecard <- scorecard[grep("[[:digit:]]", scorecard$GRAD_DEBT_MDN_SUPP), ]
+scorecard <- scorecard[grep("[[:digit:]]", scorecard$PCTPELL), ]
+
+
+scorecard <- scorecard %>%
+  mutate(UGDS_new = as.numeric(UGDS)) %>%
+  mutate(SAT_AVG_new = as.numeric(SAT_AVG)) %>%
+  mutate(GRAD_DEBT_MDN_SUPP_new = as.numeric(GRAD_DEBT_MDN_SUPP))
+```
+
+I estimated two different linear OLS models to identify what determines university popularity/search among people. I chose earning, students average SAT score, graduates average debt, enrolled student. 1. If university students have a higher salary after graduation (10 years), it may positively impact their popularity. 2. Since SAT score is one way to measure a student’s success and high-ranking universities have higher threshold for general scores, it may have positive correlation with popularity. 3. If the university students have higher debt than other universities, students may not choose that university. Therefore, I believe these 2 variables have negative correlation. 4. To represent university size, I used enrolled students’ numbers. If a lot of students enroll and the school size is relatively big, it may positively affect their popularity. 5. I tried an ownership dummy before but it did not add any value to the estimation.
+
+```{r}
+model1 <- lm(average_index_2015before ~ earning + SAT_AVG_new + GRAD_DEBT_MDN_SUPP_new + UGDS_new, data = scorecard)
+```
+
+As a result of this data that I obtained, I've arrived to the conclusion that there is no difference in school popularity between rich and low-income institutions with a 95% confidence interval. However, I came across something intriguing. From this we can see that there is positive feedback for colleges because income earnings have a positive relationship with the trend, but for the average GPA has a negative relationship with school popularity. According to the regression method, a 10% rise in the percentile of students who graduated from that university is associated with a 0.88 unit increase in the standardized popularity index. The result of f-statistics and R-square are also quite low, and this is what we can conclude from this data that we obtained.
+
+```{r}
+summary(model1)
+plot(model1)
+```
+
+
+
+
+
